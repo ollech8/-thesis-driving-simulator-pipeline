@@ -1307,6 +1307,8 @@ def add_pedestrian_stage_markers(
         print("ℹ️ No pedestrian events found (SpacialEvent contains 'walker') in df_unique_events_objects")
         return df_out
 
+    any_backfill_happened = False
+
     for _, row in ped_events.iterrows():
         event_name = row["SpacialEvent"]
         object_name = row["relevant_object_name"]
@@ -1374,6 +1376,8 @@ def add_pedestrian_stage_markers(
                     df_out.loc[gap_mask, "BaseEvent"] = base_event_label
                 if "event_category" in df_out.columns:
                     df_out.loc[gap_mask, "event_category"] = "Pedestrians"
+                if gap_mask.any():
+                    any_backfill_happened = True
 
         # שלב 2: יורד לכביש / מתחיל לחצות -- הכי קרוב לנקודת תחילת החצייה (Haversine),
         # מחפשים מהפריים שאחרי שלב 1 (לא כולל אותו) -- כך שלב 1 ושלב 2 לעולם לא
@@ -1416,6 +1420,20 @@ def add_pedestrian_stage_markers(
             )
             continue
         mark_time(stage3_time, "end crossing")
+
+    if any_backfill_happened:
+        # אחרי שהקטגוריה/האירוע מולאו אחורה, שאר המשתנים הרלוונטיים לאירוע
+        # (relevant_object_name, distance_from_relevant_object,
+        # time_since_event_start_world) צריכים להתעדכן גם הם עבור אותן שורות.
+        # במקום לשכפל את הלוגיקה, פשוט מריצים שוב את שתי הפונקציות הקיימות
+        # שכבר מחשבות את הערכים האלה -- שתיהן מבוססות אך ורק על SpacialEvent/
+        # BaseEvent הנוכחיים, שעכשיו כבר משתרעים אחורה עד רגע ההיווצרות, אז
+        # הן יתפסו את השורות שמולאו בדיוק כמו כל שורה אחרת של אותו אירוע.
+        # (time_to_collision יתעדכן בהמשך הפייפליין באופן טבעי, כי הוא כבר רץ
+        # אחרי שלב הזה ויראה event_category=="Pedestrians" עם relevant_object_name
+        # מלא.)
+        df_out = calculate_all_event_distances(df_out, df_objects, df_unique_events_objects)
+        df_out = add_time_since_event_start_world_special(df_out)
 
     return df_out
 
