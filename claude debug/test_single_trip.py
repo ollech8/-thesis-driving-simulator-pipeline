@@ -169,5 +169,5 @@ if __name__ == "__main__":
     df_out = result[0] if isinstance(result, tuple) else result
 
     out_path = os.path.join(OUTPUT_DIR, f"test_trip_{args.tag}.csv")
-    df_out.to_csv(out_path, index=False)
+    df_out.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"\nSaved: {out_path}  shape={df_out.shape}")

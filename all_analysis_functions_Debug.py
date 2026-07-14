@@ -1247,9 +1247,23 @@ def add_pedestrian_stage_markers(
     if "SimulationPosition.y" in df_obj.columns:
         df_obj["SimulationPosition.y"] = pd.to_numeric(df_obj["SimulationPosition.y"], errors="coerce")
 
+    used_rows_for_current_walker = set()
+
     def mark_time(sim_time: float, text: str):
-        """מסמן טקסט בשורה שזמן הסימולציה שלה הכי קרוב ל-sim_time, ומשרשר אם קיים ערך."""
-        idx = (main_times - sim_time).abs().idxmin()
+        """
+        מסמן טקסט בשורה שזמן הסימולציה שלה הכי קרוב ל-sim_time. מדלג על שורות
+        שכבר שובצו לשלב קודם של אותו הולך רגל (used_rows_for_current_walker) --
+        גם אחרי שכפינו זמנים שונים בפריימים הגולמיים של הולך הרגל (stage1_idx+1
+        וכו'), שני זמנים קרובים מדי עדיין יכולים "להתעגל" לאותה שורה בדיוק
+        בדאטה הראשי (שדוגם בקצב/היסט אחר) -- זה מבטיח ששלבים שונים לעולם לא
+        יתמזגו לאותו תא, גם במקרה כזה.
+        """
+        diffs = (main_times - sim_time).abs()
+        if used_rows_for_current_walker:
+            diffs = diffs.copy()
+            diffs.loc[list(used_rows_for_current_walker)] = np.inf
+        idx = diffs.idxmin()
+        used_rows_for_current_walker.add(idx)
         current = df_out.at[idx, label_col]
         if pd.isna(current) or str(current).strip() == "":
             df_out.at[idx, label_col] = text
@@ -1296,6 +1310,7 @@ def add_pedestrian_stage_markers(
     for _, row in ped_events.iterrows():
         event_name = row["SpacialEvent"]
         object_name = row["relevant_object_name"]
+        used_rows_for_current_walker.clear()
 
         pts = df_points[df_points["SpacialEvent"] == event_name]
         if pts.empty:
@@ -1332,7 +1347,7 @@ def add_pedestrian_stage_markers(
         if stage1_time is None:
             print(f"⚠️ Could not compute stage-1 (created) time for {object_name} (event={event_name})")
             continue
-        mark_time(stage1_time, f"start walking: {object_name}")
+        mark_time(stage1_time, "start walking")
 
         # מילוי קטגוריה אחורה מרגע ההיווצרות, אם היא ריקה שם (רק מילוי, לא דריסה).
         # העוגן התחתון הוא הזמן בפועל של השורה שבה הוצב הסימון (לא stage1_time הגולמי
@@ -1360,8 +1375,14 @@ def add_pedestrian_stage_markers(
                 if "event_category" in df_out.columns:
                     df_out.loc[gap_mask, "event_category"] = "Pedestrians"
 
-        # שלב 2: יורד לכביש / מתחיל לחצות -- הכי קרוב לנקודת תחילת החצייה (Haversine), משלב 1 והלאה
-        traj_from_stage1 = traj.iloc[stage1_idx:].reset_index(drop=True)
+        # שלב 2: יורד לכביש / מתחיל לחצות -- הכי קרוב לנקודת תחילת החצייה (Haversine),
+        # מחפשים מהפריים שאחרי שלב 1 (לא כולל אותו) -- כך שלב 1 ושלב 2 לעולם לא
+        # יצביעו על אותה שורה בדיוק, גם אם נקודת ההיווצרות זהה לנקודת תחילת החצייה
+        # (כמו שקורה בפועל להולכי רגל שנוצרים ממש על קצה הכביש).
+        if stage1_idx + 1 >= len(traj):
+            print(f"⚠️ No trajectory left after stage-1 for {object_name} (event={event_name})")
+            continue
+        traj_from_stage1 = traj.iloc[stage1_idx + 1:].reset_index(drop=True)
         stage2_time, stage2_idx, stage2_dist = find_time_of_min_distance(
             traj_from_stage1, s_lon, s_lat, lon_col, lat_col, use_haversine=True
         )
@@ -1374,10 +1395,14 @@ def add_pedestrian_stage_markers(
                 f"| event={event_name} | object={object_name} — NOT marking"
             )
             continue
-        mark_time(stage2_time, f"start crossing: {object_name}")
+        mark_time(stage2_time, "start crossing")
 
-        # שלב 3: עולה למדרכה / מסיים לחצות -- הכי קרוב לנקודת סיום החצייה (Haversine), משלב 2 והלאה
-        traj_from_stage2 = traj_from_stage1.iloc[stage2_idx:].reset_index(drop=True)
+        # שלב 3: עולה למדרכה / מסיים לחצות -- הכי קרוב לנקודת סיום החצייה (Haversine),
+        # מחפשים מהפריים שאחרי שלב 2 (לא כולל אותו), מאותה סיבה.
+        if stage2_idx + 1 >= len(traj_from_stage1):
+            print(f"⚠️ No trajectory left after stage-2 for {object_name} (event={event_name})")
+            continue
+        traj_from_stage2 = traj_from_stage1.iloc[stage2_idx + 1:].reset_index(drop=True)
         stage3_time, stage3_idx, stage3_dist = find_time_of_min_distance(
             traj_from_stage2, e_lon, e_lat, lon_col, lat_col, use_haversine=True
         )
@@ -1390,7 +1415,7 @@ def add_pedestrian_stage_markers(
                 f"| event={event_name} | object={object_name} — NOT marking end"
             )
             continue
-        mark_time(stage3_time, f"end crossing: {object_name}")
+        mark_time(stage3_time, "end crossing")
 
     return df_out
 

@@ -70,7 +70,9 @@ def record_fail(pid, condition, map_type, step, err):
         "ErrorMessage": str(err)
     }])
     write_header = not os.path.exists(failed_path)
-    row.to_csv(failed_path, mode="a", header=write_header, index=False)
+    # utf-8-sig (UTF-8 + BOM) so Excel auto-detects the encoding and displays
+    # Hebrew text correctly instead of mojibake when the CSV is opened directly.
+    row.to_csv(failed_path, mode="a", header=write_header, index=False, encoding="utf-8-sig")
 
 def append_output(df_part):
     extra_cols = [c for c in df_part.columns if c not in CANONICAL_COLUMNS]
@@ -78,7 +80,10 @@ def append_output(df_part):
         print(f"⚠️ append_output: dropping unexpected column(s) not in CANONICAL_COLUMNS: {extra_cols}")
     df_part = df_part.reindex(columns=CANONICAL_COLUMNS)
     write_header = not os.path.exists(output_path)
-    df_part.to_csv(output_path, mode="a", header=write_header, index=False)
+    # utf-8-sig (UTF-8 + BOM) so Excel auto-detects the encoding and displays
+    # Hebrew text (the `text`/`speaker` columns) correctly instead of mojibake
+    # when the CSV is opened directly, instead of plain "utf-8" with no BOM.
+    df_part.to_csv(output_path, mode="a", header=write_header, index=False, encoding="utf-8-sig")
 
 
 # -------------------
