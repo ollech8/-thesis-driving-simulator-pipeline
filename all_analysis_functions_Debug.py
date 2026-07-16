@@ -1308,6 +1308,7 @@ def add_pedestrian_stage_markers(
         return df_out
 
     any_backfill_happened = False
+    critical_lines = {}  # object_name -> (line_a_x, line_a_y, line_b_x, line_b_y), in meters
 
     for _, row in ped_events.iterrows():
         event_name = row["SpacialEvent"]
@@ -1421,6 +1422,16 @@ def add_pedestrian_stage_markers(
             continue
         mark_time(stage3_time, "end crossing")
 
+        # שומרים את קו החצייה (בין נקודת תחילת החצייה לנקודת סיום החצייה,
+        # ביחידות SimulationPosition.x/y -- מטרים, אותה מערכת צירים כמו
+        # PositionX/PositionY של הרכב) -- כדי לחשב אחר כך time_to_critical_point
+        # לכל שורה של הולך רגל זה: מרחק ניצב לקו הזה, חלקי Speed.
+        line_a_x = float(traj_from_stage1.iloc[stage2_idx]["SimulationPosition.x"])
+        line_a_y = float(traj_from_stage1.iloc[stage2_idx]["SimulationPosition.y"])
+        line_b_x = float(traj_from_stage2.iloc[stage3_idx]["SimulationPosition.x"])
+        line_b_y = float(traj_from_stage2.iloc[stage3_idx]["SimulationPosition.y"])
+        critical_lines[object_name] = (line_a_x, line_a_y, line_b_x, line_b_y)
+
     if any_backfill_happened:
         # אחרי שהקטגוריה/האירוע מולאו אחורה, שאר המשתנים הרלוונטיים לאירוע
         # (relevant_object_name, distance_from_relevant_object,
@@ -1434,6 +1445,31 @@ def add_pedestrian_stage_markers(
         # מלא.)
         df_out = calculate_all_event_distances(df_out, df_objects, df_unique_events_objects)
         df_out = add_time_since_event_start_world_special(df_out)
+
+    # time_to_critical_point: מרחק ניצב מהרכב לקו החצייה (בין נקודת תחילת
+    # החצייה לנקודת סיום החצייה) של הולך הרגל הרלוונטי לאותה שורה, חלקי
+    # Speed הנוכחי -- בלי כיוון/וקטור, בדיוק כמו נוסחת ה-TTC הישנה
+    # (מרחק/מהירות), רק מול הקו במקום מול נקודה/אובייקט נע.
+    if critical_lines and "PositionX" in df_out.columns and "PositionY" in df_out.columns:
+        df_out["time_to_critical_point"] = np.nan
+        pos_x = pd.to_numeric(df_out["PositionX"], errors="coerce")
+        pos_y = pd.to_numeric(df_out["PositionY"], errors="coerce")
+        speed = pd.to_numeric(df_out["Speed"], errors="coerce")
+
+        for obj_name, (ax, ay, bx, by) in critical_lines.items():
+            obj_mask = df_out["relevant_object_name"].astype(str).str.strip() == obj_name
+            if not obj_mask.any():
+                continue
+            for idx in df_out.index[obj_mask]:
+                px, py, sp = pos_x.at[idx], pos_y.at[idx], speed.at[idx]
+                # MIN_MEANINGFUL_SPEED: מתחת לזה, distance/speed מתפוצץ לערך
+                # עצום וחסר משמעות (בדיוק כמו שקרה ב-TTC הישן לפני שתיקנו) --
+                # לא מדווחים ערך במקום מספר אבסורדי.
+                MIN_MEANINGFUL_SPEED = 0.5
+                if pd.isna(px) or pd.isna(py) or pd.isna(sp) or sp <= MIN_MEANINGFUL_SPEED:
+                    continue
+                dist = perpendicular_distance_to_line(px, py, ax, ay, bx, by)
+                df_out.at[idx, "time_to_critical_point"] = dist / sp
 
     return df_out
 
@@ -2072,6 +2108,24 @@ def compute_ttc_dynamic_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, obj_
         return float("inf")
 
     return distance / closing_speed
+
+
+def perpendicular_distance_to_line(px, py, ax, ay, bx, by):
+    """
+    מרחק ניצב (perpendicular) מנקודה P לקו האינסופי שעובר דרך A ו-B.
+    לא תלוי בכיוון/מהירות -- רק גיאומטריה של מיקומים. משמש עבור
+    time_to_critical_point = מרחק זה חלקי Speed, באותו רעיון של TTC הישן
+    (מרחק חלקי מהירות), רק מול קו החצייה (בין ped_start ל-ped_end) במקום
+    מול נקודה/אובייקט נע.
+    """
+    dx = bx - ax
+    dy = by - ay
+    line_len = np.hypot(dx, dy)
+    if line_len < 1e-9:
+        return float(np.hypot(px - ax, py - ay))
+    # |cross(B-A, P-A)| / |B-A|
+    cross = dx * (py - ay) - dy * (px - ax)
+    return float(abs(cross) / line_len)
 
 
 def compute_ttc_quadratic_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, obj_y, obj_vx, obj_vy, min_dist=2.0, eps=1e-8):

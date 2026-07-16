@@ -46,7 +46,7 @@ CANONICAL_COLUMNS = [
     "Yaw", "SteeringAngle", "Brake", "Braking", "Accelerating", "TurnRight", "TurnLeft",
     "SpacialEvent", "Reason", "BaseEvent", "time_since_event_start_world",
     "event_category", "Overtake", "distance_from_relevant_object",
-    "relevant_object_name", "Pedestrian", "TrafficLight",
+    "relevant_object_name", "time_to_critical_point", "Pedestrian", "TrafficLight",
     "TrafficLight_JunctionPhase", "gap_acceptance", "time_to_collision",
     "ttc_object_name", "text", "speaker", "transcript_type", "comment_flag",
     "start_comment", "first_feedback_in_event",
@@ -117,6 +117,20 @@ if filtered_rows.empty:
 participant_ids = sorted(filtered_rows["Id"].dropna().unique().tolist())
 print(f"Found {len(participant_ids)} participants after filtering.")
 
+# Resume support: skip any (Id, Condition, Map) combo already present in the
+# existing output file, so a stopped/interrupted run can continue without
+# duplicating already-completed trips. No-op on a fresh run (file doesn't exist).
+already_done = set()
+if os.path.exists(output_path):
+    try:
+        existing = pd.read_csv(output_path, usecols=["Id", "Condition", "Map"], encoding="utf-8-sig")
+        already_done = set(
+            zip(existing["Id"].astype(str), existing["Condition"].astype(str), existing["Map"].astype(str))
+        )
+        print(f"Resuming: {len(already_done)} (Id,Condition,Map) combos already in output, will be skipped.")
+    except Exception as e:
+        print(f"⚠️ Could not read existing output for resume check: {e}")
+
 
 # -------------------
 # RUN PIPELINE FOR ALL
@@ -131,6 +145,11 @@ for participant_id in participant_ids:
     for _, meta_row in participant_rows.iterrows():
         condition = meta_row.get("Condition", "")
         map_type = meta_row.get("Map", "")
+
+        combo_key = (str(participant_id), str(condition), str(map_type))
+        if combo_key in already_done:
+            print(f"⏭️ Skip (already done): {participant_id} | {condition} | Map {map_type}")
+            continue
 
         # Skip Training / Baseline
         cond = normalize_str(condition).lower()

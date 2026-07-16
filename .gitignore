@@ -19,3 +19,5 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+full_run_log.txt
+archive_before_fixes/
