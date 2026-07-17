@@ -2066,7 +2066,11 @@ def compute_ttc_static_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, obj_y
     ego_vy = ego_speed * np.sin(yaw)
 
     closing_speed = (rx * ego_vx + ry * ego_vy) / distance
-    if closing_speed <= 0:
+    # מתחת לסף הזה, distance/closing_speed מתפוצץ לערך עצום וחסר משמעות
+    # (בדיוק כמו שקרה בענפים אחרים לפני שהוספנו הגנה דומה) -- לא רק
+    # closing_speed<=0, אלא כל קצב סגירה זניח.
+    MIN_MEANINGFUL_CLOSING_SPEED = 0.5
+    if closing_speed <= MIN_MEANINGFUL_CLOSING_SPEED:
         return float("inf"), distance
 
     return distance / closing_speed, distance
@@ -2104,7 +2108,11 @@ def compute_ttc_dynamic_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, obj_
 
     # מהירות הסגירה = מינוס הנגזרת של המרחק (d|r|/dt = (r . v_rel)/|r|)
     closing_speed = -(rx * vrel_x + ry * vrel_y) / distance
-    if closing_speed <= 0:
+    # מתחת לסף הזה, distance/closing_speed מתפוצץ לערך עצום וחסר משמעות --
+    # אומת בנתונים האמיתיים (עד 49,459 שניות עבור רכבים ממול כשקצב הסגירה
+    # קרוב לאפס אך לא בדיוק אפס). לא רק closing_speed<=0, אלא כל קצב סגירה זניח.
+    MIN_MEANINGFUL_CLOSING_SPEED = 0.5
+    if closing_speed <= MIN_MEANINGFUL_CLOSING_SPEED:
         return float("inf")
 
     return distance / closing_speed
@@ -2243,6 +2251,12 @@ def calculate_time_to_collision_with_police(
       הקיימת (מחוץ לתחום התיקון הנוכחי), עם הגנה נקודתית מפני חלוקה במהירות
       קרובה לאפס.
     """
+    # מרחק מקסימלי סביר לחישוב TTC בכלל -- מועמד "רלוונטי" יכול בפועל להיות
+    # רחוק מאוד ברגע נתון (אומת בנתונים אמיתיים: 659 מ'), מה שמייצר TTC ענק
+    # וחסר משמעות גם כשקצב הסגירה חיובי. אותו MAX_DISTANCE_TO_CALC_TTC כמו
+    # בסקריפט המקורי ששיתפת.
+    MAX_DISTANCE_TO_CALC_TTC = 200.0
+
     df_ttc = df_with_distances_gap.copy()
     df_ttc["time_to_collision"] = np.nan
     df_ttc["ttc_object_name"] = None
@@ -2311,7 +2325,7 @@ def calculate_time_to_collision_with_police(
         # שלב 1: לפני שהרכב שלנו נעצר -- TTC מול רכב המשטרה
         if in_police_phase:
             ttc, distance = compute_ttc_static_object(ego_x, ego_y, speed, yaw, police_x, police_y)
-            if distance > 0 and not np.isinf(ttc):
+            if 0 < distance <= MAX_DISTANCE_TO_CALC_TTC and not np.isinf(ttc):
                 df_ttc.at[idx, "time_to_collision"] = ttc
                 df_ttc.at[idx, "ttc_object_name"] = police_name
 
@@ -2344,6 +2358,13 @@ def calculate_time_to_collision_with_police(
                 obj_vy = (r1["SimulationPosition.y"] - r0["SimulationPosition.y"]) / dt
                 obj_x = cand_traj.iloc[nearest_pos]["SimulationPosition.x"]
                 obj_y = cand_traj.iloc[nearest_pos]["SimulationPosition.y"]
+
+                # מועמד "רלוונטי" (df_unique_events_objects) יכול בפועל להיות
+                # רחוק מאוד ברגע הנוכחי הספציפי, גם אם קצב הסגירה שלו חיובי --
+                # מגבילים לטווח סביר (MAX_DISTANCE_TO_CALC_TTC, מוגדר למעלה).
+                cand_distance = np.hypot(obj_x - ego_x, obj_y - ego_y)
+                if cand_distance > MAX_DISTANCE_TO_CALC_TTC:
+                    continue
 
                 cand_ttc = compute_ttc_dynamic_object(ego_x, ego_y, speed, yaw, obj_x, obj_y, obj_vx, obj_vy)
                 if cand_ttc < best_ttc:
@@ -2381,6 +2402,9 @@ def calculate_time_to_collision_with_police(
             ped_vy = (r1["SimulationPosition.y"] - r0["SimulationPosition.y"]) / dt
             ped_x = ped_traj.iloc[nearest_pos]["SimulationPosition.x"]
             ped_y = ped_traj.iloc[nearest_pos]["SimulationPosition.y"]
+
+            if np.hypot(ped_x - ego_x, ped_y - ego_y) > MAX_DISTANCE_TO_CALC_TTC:
+                continue
 
             ttc = compute_ttc_quadratic_object(ego_x, ego_y, speed, yaw, ped_x, ped_y, ped_vx, ped_vy, min_dist=2.0)
             if not np.isinf(ttc):
