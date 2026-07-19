@@ -1460,6 +1460,12 @@ def add_pedestrian_stage_markers(
             obj_mask = df_out["relevant_object_name"].astype(str).str.strip() == obj_name
             if not obj_mask.any():
                 continue
+            # baseline_sign: הצד של הקו שבו הרכב נמצא כשהוא מתחיל להיות רלוונטי
+            # לאירוע הזה. ברגע שהסימן מתהפך (הרכב עבר לצד השני של קו החצייה),
+            # מפסיקים לחשב time_to_critical_point עבור שאר השורות של האובייקט
+            # הזה -- אין טעם לדווח "זמן עד ההגעה לנקודה" אחרי שכבר הגיעו אליה.
+            baseline_sign = None
+            passed_critical_point = False
             for idx in df_out.index[obj_mask]:
                 px, py, sp = pos_x.at[idx], pos_y.at[idx], speed.at[idx]
                 # MIN_MEANINGFUL_SPEED: מתחת לזה, distance/speed מתפוצץ לערך
@@ -1468,8 +1474,17 @@ def add_pedestrian_stage_markers(
                 MIN_MEANINGFUL_SPEED = 0.5
                 if pd.isna(px) or pd.isna(py) or pd.isna(sp) or sp <= MIN_MEANINGFUL_SPEED:
                     continue
-                dist = perpendicular_distance_to_line(px, py, ax, ay, bx, by)
-                df_out.at[idx, "time_to_critical_point"] = dist / sp
+                if passed_critical_point:
+                    continue
+                signed_dist = signed_perpendicular_distance_to_line(px, py, ax, ay, bx, by)
+                current_sign = 1 if signed_dist > 0 else (-1 if signed_dist < 0 else 0)
+                if baseline_sign is None:
+                    if current_sign != 0:
+                        baseline_sign = current_sign
+                elif current_sign != 0 and current_sign != baseline_sign:
+                    passed_critical_point = True
+                    continue
+                df_out.at[idx, "time_to_critical_point"] = abs(signed_dist) / sp
 
     return df_out
 
@@ -2134,6 +2149,21 @@ def perpendicular_distance_to_line(px, py, ax, ay, bx, by):
     # |cross(B-A, P-A)| / |B-A|
     cross = dx * (py - ay) - dy * (px - ax)
     return float(abs(cross) / line_len)
+
+
+def signed_perpendicular_distance_to_line(px, py, ax, ay, bx, by):
+    """
+    כמו perpendicular_distance_to_line, אבל עם סימן: הסימן מציין באיזה צד
+    של הקו הנקודה נמצאת. משמש כדי לזהות מתי הרכב עבר מצד אחד של קו החצייה
+    לצד השני (שינוי סימן), ואז להפסיק לחשב time_to_critical_point.
+    """
+    dx = bx - ax
+    dy = by - ay
+    line_len = np.hypot(dx, dy)
+    if line_len < 1e-9:
+        return float(np.hypot(px - ax, py - ay))
+    cross = dx * (py - ay) - dy * (px - ax)
+    return float(cross / line_len)
 
 
 def compute_ttc_quadratic_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, obj_y, obj_vx, obj_vy, min_dist=2.0, eps=1e-8):
