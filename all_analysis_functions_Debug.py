@@ -1408,8 +1408,19 @@ def add_pedestrian_stage_markers(
             print(f"⚠️ No trajectory left after stage-2 for {object_name} (event={event_name})")
             continue
         traj_from_stage2 = traj_from_stage1.iloc[stage2_idx + 1:].reset_index(drop=True)
+
+        # הולך רגל 1 (מפה A) מתנהג אחרת מכל שאר ההולכי רגל: במקום להמשיך לצד
+        # השני של הכביש, הוא חוזר לאותה נקודה שממנה עלה לכביש (אומת בנתונים
+        # בפועל). לכן, רק עבורו, שלב 3 מוגדר כהופעה *השנייה* של המסלול קרוב
+        # לנקודת תחילת החצייה (לא לנקודת הסיום מ-objectPoints.csv) -- ההופעה
+        # הראשונה היא שלב 2 עצמו (תחילת החצייה), השנייה (מחפשים מהפריים שאחרי
+        # שלב 2 והלאה, כמו תמיד) היא שלב 3 (סיום החצייה, כשהוא חוזר לאותה נקודה).
+        pednum_match = re.search(r"walker(\d+)", event_name, flags=re.IGNORECASE)
+        is_walker1 = pednum_match is not None and pednum_match.group(1) == "1"
+        stage3_target_lon, stage3_target_lat = (s_lon, s_lat) if is_walker1 else (e_lon, e_lat)
+
         stage3_time, stage3_idx, stage3_dist = find_time_of_min_distance(
-            traj_from_stage2, e_lon, e_lat, lon_col, lat_col, use_haversine=True
+            traj_from_stage2, stage3_target_lon, stage3_target_lat, lon_col, lat_col, use_haversine=True
         )
         if stage3_time is None:
             print(f"⚠️ Could not compute stage-3 (end crossing) time for {object_name} (event={event_name})")
