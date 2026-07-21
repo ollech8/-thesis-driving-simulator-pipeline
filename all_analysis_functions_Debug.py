@@ -896,7 +896,7 @@ def process_objects_data(file_path):
     # המרת עמודות מספריות (נניח שאלה השמות, ניתן לשנות בהתאם)
     numeric_columns = ["SimulationTime", "SimulationPosition.x", "SimulationPosition.y"]
     df_objects = convert_columns_to_numeric(df_objects, numeric_columns)
-    
+
     # מיון לפי זמן הסימולציה
     df_sorted = sort_by_simulation_time(df_objects)
 
@@ -1467,7 +1467,10 @@ def add_pedestrian_stage_markers(
             baseline_sign = None
             passed_critical_point = False
             for idx in df_out.index[obj_mask]:
-                px, py, sp = pos_x.at[idx], pos_y.at[idx], speed.at[idx]
+                px, py, sp_kmh = pos_x.at[idx], pos_y.at[idx], speed.at[idx]
+                # Speed מגיע בקמ"ש (ראו הערה ב-compute_ttc_static_object) --
+                # ממירים למ'/ש כאן, בתוך הנוסחה, לפני שמשתמשים בו.
+                sp = sp_kmh / 3.6 if pd.notna(sp_kmh) else sp_kmh
                 # MIN_MEANINGFUL_SPEED: מתחת לזה, distance/speed מתפוצץ לערך
                 # עצום וחסר משמעות (בדיוק כמו שקרה ב-TTC הישן לפני שתיקנו) --
                 # לא מדווחים ערך במקום מספר אבסורדי.
@@ -2036,7 +2039,9 @@ def detect_ego_stop_time(df_with_distances_gap, speed_threshold=0.3, min_duratio
     """
     df_tmp = df_with_distances_gap.copy()
     df_tmp["SpacialEvent"] = df_tmp["SpacialEvent"].astype(str).str.lower()
-    df_tmp["Speed"] = pd.to_numeric(df_tmp["Speed"], errors="coerce")
+    # Speed מגיע בקמ"ש -- ראו הערה ב-compute_ttc_static_object. speed_threshold
+    # (0.3) מוגדר במ'/ש, אז ממירים כאן לפני ההשוואה.
+    df_tmp["Speed"] = pd.to_numeric(df_tmp["Speed"], errors="coerce") / 3.6
     df_tmp["SimulationTime"] = pd.to_numeric(df_tmp["SimulationTime"], errors="coerce")
     df_tmp = df_tmp.sort_values("SimulationTime").reset_index(drop=True)
 
@@ -2076,9 +2081,13 @@ def compute_ttc_static_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, obj_y
     if distance < 1e-6:
         return 0.0, distance
 
+    # ego_speed מגיע בקמ"ש (כפי שנרשם בקובץ הגולמי -- אומת אמפירית מול מהירות
+    # מחושבת ממיקום/זמן, יחס ~3.6 עקבי), בעוד PositionX/Y במטרים -- ממירים
+    # למ'/ש כאן, בתוך הנוסחה עצמה, כדי ש-closing_speed יהיה במ'/ש אמיתיים.
+    ego_speed_mps = ego_speed / 3.6
     yaw = np.radians(ego_yaw_deg)
-    ego_vx = ego_speed * np.cos(yaw)
-    ego_vy = ego_speed * np.sin(yaw)
+    ego_vx = ego_speed_mps * np.cos(yaw)
+    ego_vy = ego_speed_mps * np.sin(yaw)
 
     closing_speed = (rx * ego_vx + ry * ego_vy) / distance
     # מתחת לסף הזה, distance/closing_speed מתפוצץ לערך עצום וחסר משמעות
@@ -2114,9 +2123,11 @@ def compute_ttc_dynamic_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, obj_
     if distance < eps:
         return 0.0
 
+    # ego_speed מגיע בקמ"ש -- ראו הערה זהה ב-compute_ttc_static_object.
+    ego_speed_mps = ego_speed / 3.6
     yaw = np.radians(ego_yaw_deg)
-    ego_vx = ego_speed * np.cos(yaw)
-    ego_vy = ego_speed * np.sin(yaw)
+    ego_vx = ego_speed_mps * np.cos(yaw)
+    ego_vy = ego_speed_mps * np.sin(yaw)
 
     vrel_x = obj_vx - ego_vx
     vrel_y = obj_vy - ego_vy
@@ -2183,9 +2194,11 @@ def compute_ttc_quadratic_object(ego_x, ego_y, ego_speed, ego_yaw_deg, obj_x, ob
     rx = obj_x - ego_x
     ry = obj_y - ego_y
 
+    # ego_speed מגיע בקמ"ש -- ראו הערה זהה ב-compute_ttc_static_object.
+    ego_speed_mps = ego_speed / 3.6
     yaw = np.radians(ego_yaw_deg)
-    ego_vx = ego_speed * np.cos(yaw)
-    ego_vy = ego_speed * np.sin(yaw)
+    ego_vx = ego_speed_mps * np.cos(yaw)
+    ego_vy = ego_speed_mps * np.sin(yaw)
 
     vrel_x = obj_vx - ego_vx
     vrel_y = obj_vy - ego_vy
@@ -2457,7 +2470,11 @@ def calculate_time_to_collision_with_police(
                 relative_movement = obj_type_row["relative_movement"].values[0] if "relative_movement" in obj_type_row else "static"
 
             obj_speed_row = df_objects[df_objects["Name"] == obj_name]
-            object_speed = obj_speed_row["Speed"].values[0] if not obj_speed_row.empty else 0.0
+            # שני ה-Speed מגיעים בקמ"ש (גם ego וגם אובייקטים אחרים -- ראו הערה
+            # ב-compute_ttc_static_object) -- ממירים כאן למ'/ש לפני שמשלבים
+            # אותם עם distance (במטרים).
+            object_speed = (obj_speed_row["Speed"].values[0] / 3.6) if not obj_speed_row.empty else 0.0
+            speed = speed / 3.6
 
             if relative_movement == "static":
                 relative_speed = speed
