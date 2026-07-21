@@ -2774,7 +2774,12 @@ def add_first_feedback_in_event(df):
         if pd.isna(spk):
             return True
         s = str(spk).strip().lower()
-        return s in ("", "nan", "מלווה", "accompanier")
+        if s in ("", "nan"):
+            return True
+        # כולל גם שורות משולבות (כמו "מלווה | נהג", כשתמלול של שני הדוברים
+        # נחת על אותה שורה) -- לא רק "מלווה" בלבד, אלא כל שורה שהמלווה מדבר
+        # בה, גם אם הנהג מדבר בה גם כן.
+        return "מלווה" in s or "accompanier" in s
 
     for _, group in df.groupby(group_cols):
         accompanier_mask = group["speaker"].apply(_is_accompanier_or_na)
